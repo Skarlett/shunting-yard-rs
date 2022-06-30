@@ -218,7 +218,14 @@ fn eval<T: Deref<Target=Token>>(data: &str, postfix: &[T]) -> f32
                 stack.push(result);
             },
 
-            (None, Some(b)) => return b,
+            (None, Some(b)) => {
+		let result = if matches!(tok.token_type, Lexer::Minus) {
+		    -b
+		} else {
+		    b
+		};
+		stack.push(result)
+	    }
             (None, None) | (Some(_), None) => unreachable!()
         }
     }
