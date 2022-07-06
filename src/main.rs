@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+/// Operation assocatition
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 enum OpAssoc {
   Left,
@@ -7,6 +8,7 @@ enum OpAssoc {
   NonAssoc
 }
 
+/// The type of token.
 #[derive(Debug, Clone, Copy)]
 enum Lexer {
   ParamOpen,
@@ -74,22 +76,25 @@ impl Token {
   }
 }
 
-fn tokenize_num(acc: &mut Vec<Token>) -> Option<Lexer>
+/// Creates multi-character representation of a number.
+fn tokenize_num(prev: Option<&mut Token>) -> Option<Lexer>
 {
-  let last = acc.last_mut();
+  match prev {
+    None => Some(Lexer::Num),
 
-  if let None = last {
-    return Some(Lexer::Num)
+    Some(last) => {
+      // If the last token-type was a number,
+      // and the current token, increment the last
+      // token's end length to build a larger digit
+      // eg "12"...
+      if let Lexer::Num = last.token_type {
+        last.end += 1;
+        return None;
+      }
+
+      return Some(Lexer::Num);
+    }
   }
-  // Not None - so unwrap.
-  let last = last.unwrap();
-
-  if let Lexer::Num = last.token_type {
-    last.end += 1;
-    return None;
-  }
-
-  Some(Lexer::Num)
 }
 
 fn guard_integer(c: char) -> bool
@@ -100,10 +105,21 @@ fn tokenize(mut acc: Vec<Token>, i: usize, c: char) -> Vec<Token>
 {
   let token = match c {
     ' ' | '\n' | '\t' => None,
-
-    // operators
     '+' => Some(Lexer::Add),
-    '-' => Some(Lexer::Minus),
+
+    // jasonzou0 noted that we should consider
+    // negative numbers.
+    // if the previous token was a number
+    // or closed parenthesis, we create a minus token.
+    // Otherwise, we start building our a number token.
+    '-' => match acc.last() {
+        Some(x) => match x.token_type {
+          Lexer::Num | Lexer::ParamClose => Some(Lexer::Minus),
+          _ => Some(Lexer::Num),
+        }
+        None => Some(Lexer::Num)
+    },
+
     '*' => Some(Lexer::Mul),
     '/' => Some(Lexer::Div),
     '^' => Some(Lexer::Pow),
@@ -112,8 +128,7 @@ fn tokenize(mut acc: Vec<Token>, i: usize, c: char) -> Vec<Token>
     '(' => Some(Lexer::ParamOpen),
     ')' => Some(Lexer::ParamClose),
 
-    _ if guard_integer(c) => tokenize_num(&mut acc),
-
+    _ if guard_integer(c) => tokenize_num(acc.last_mut()),
     x => panic!("unknown token [{}:{}] '{}'", i, i, x)
   };
 
@@ -125,6 +140,7 @@ fn tokenize(mut acc: Vec<Token>, i: usize, c: char) -> Vec<Token>
 }
 
 /// Shunting yard algorithm
+///
 fn parser<'a>(tokens: &'a [Token]) -> Vec<&'a Token>
 {
     let mut stack = Vec::new();
@@ -178,9 +194,6 @@ fn parser<'a>(tokens: &'a [Token]) -> Vec<&'a Token>
     return stack;
 }
 
-// slightly confusing function name,
-// parses an f32 from a string.
-// the string slice may include `_`
 fn integer(data: &str, tok: &Token) -> f32 {
   data[tok.start..tok.end]
       .chars()
@@ -190,12 +203,12 @@ fn integer(data: &str, tok: &Token) -> f32 {
       .expect("Couldn't parse integer")
 }
 
-/// evaluate the postfix expression 
-fn eval<T: Deref<Target=Token>>(data: &str, postfix: &[T]) -> f32
+fn eval<T: Deref<Target=Token> + std::fmt::Debug>(data: &str, postfix: &[T]) -> f32
 {
     let mut stack = Vec::new();
-    
+
     for tok in postfix.iter() {
+
         if let Lexer::Num = tok.token_type {
             stack.push(integer(data, tok));
             continue
@@ -217,8 +230,8 @@ fn eval<T: Deref<Target=Token>>(data: &str, postfix: &[T]) -> f32
                 };
                 stack.push(result);
             },
-
-            (None, Some(b)) => return b,
+            (None, Some(b)) => stack.push(b),
+            //(None, Some(b)) => return b,
             (None, None) | (Some(_), None) => unreachable!()
         }
     }
@@ -238,23 +251,129 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
     stdout().flush()?;
     stdin().read_line(&mut buffer)?;
 
-    if buffer.eq("q") { break }
-    
-    // create tokens
+    if buffer.eq("q\n") { break }
+
     let tokens: Vec<Token> = buffer.chars()
       .enumerate()
       .fold(Vec::new(), |acc, (i, c)| tokenize(acc, i, c));
-    
-    // convert to postfix
+
     let postfix = parser(&tokens);
-    
-    // evaluate the answer
     let result = eval(&buffer, &postfix);
 
-    // print
     println!("{}", result);
     buffer.clear();
   }
 
   Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn run_stage(input: &str) -> f32
+  {
+    let tokens: Vec<Token> = input.chars()
+      .enumerate()
+      .fold(Vec::new(), |acc, (i, c)| tokenize(acc, i, c));
+
+    let postfix = parser(&tokens);
+    return eval(input, &postfix);
+  }
+
+  #[test]
+  fn number()
+  {
+    assert_eq!(run_stage("1000"), 1000.0);
+    assert_eq!(run_stage("1_000"), 1000.0);
+    assert_eq!(run_stage("1_000_"), 1000.0);
+    assert_eq!(run_stage("_1_000_"), 1000.0);
+    assert_eq!(run_stage("_1__000_"), 1000.0);
+  }
+
+  #[test]
+  fn floating_point()
+  {
+    assert_eq!(run_stage("1.0"), 1.0);
+    assert_eq!(run_stage("1._0"), 1.0);
+    assert_eq!(run_stage("1.0_"), 1.0);
+    assert_eq!(run_stage("1.0_"), 1.0);
+    assert_eq!(run_stage("_1.0"), 1.0);
+    assert_eq!(run_stage("1.__0"), 1.0);
+  }
+
+  #[test]
+  fn addition()
+  {
+    assert_eq!(run_stage("100 + 100"), 100.0 + 100.0);
+    assert_eq!(run_stage("1.50 + 1.50"), 1.5 + 1.5);
+    assert_eq!(run_stage("1_000 + 1_000"), 1000.0 + 1000.0);
+  }
+
+  #[test]
+  fn subtraction()
+  {
+    assert_eq!(run_stage("-1"), -1.0);
+    assert_eq!(run_stage("-1 + -1"), -1.0 + -1.0);
+    assert_eq!(run_stage("1 + ( -19 + 2 * 20)"), 1.0 + (-19.0 + 2.0 * 20.0));
+  }
+
+  #[test]
+  fn multiply()
+  {
+    assert_eq!(run_stage("3 * 0"), 3.0 * 0.0);
+    assert_eq!(run_stage("3 * 1"), 3.0 * 1.0);
+    assert_eq!(run_stage("3 * 2"), 3.0 * 2.0);
+    assert_eq!(run_stage("1.5 * 2"), 1.5 * 2.0);
+    assert_eq!(run_stage("-1.5 * -2"), -1.5 * -2.0);
+    assert_eq!(run_stage("-1.5 * 2"), -3.0);
+  }
+
+  #[test]
+  fn divide()
+  {
+    assert_eq!(run_stage("0 / 1"), 0.0);
+    assert_eq!(run_stage("1 / 1"), 1.0 / 1.0);
+    assert_eq!(run_stage("1 / 2"), 1.0 / 2.0);
+    assert_eq!(run_stage("10 / 2"), 10.0 / 2.0);
+    assert_eq!(run_stage("-10 / -2"), 5.0);
+    assert_eq!(run_stage("10 / -2"), -5.0);
+    assert_eq!(run_stage("1000 / 10 / 10"), 10.0);
+  }
+
+  #[test]
+  fn modolus()
+  {
+    assert_eq!(run_stage("2 % 1"), 2.0 % 1.0);
+    assert_eq!(run_stage("5 % 2"), 5.0 % 2.0);
+    assert_eq!(run_stage("-5 % 2"), -1.0);
+    assert_eq!(run_stage("-5 % -2"), -1.0);
+    assert_eq!(run_stage("5.5 % 2"), 5.5 % 2.0);
+  }
+
+  #[test]
+  fn exponential()
+  {
+    assert_eq!(run_stage("2^1"), 2.0);
+    assert_eq!(run_stage("2^3"), 8.0);
+    assert_eq!(run_stage("2^3^2"), 512.0);
+    assert_eq!(run_stage("2^3^2*2"), 1024.0);
+    assert_eq!(run_stage("-1^-1"), -1.0);
+    assert_eq!(run_stage("2^-1"), 0.5);
+  }
+
+  #[test]
+  fn pemdas()
+  {
+    assert_eq!(run_stage("(1 + 3) * 4"), 16.0);
+    assert_eq!(run_stage("1 + 3 * 4"), 13.0);
+  }
+
+  #[test]
+  fn jasonzou0_pr1()
+  {
+    assert_eq!(run_stage("-19 + 20)"), 1.0);
+    assert_eq!(run_stage("1 + ( -19 + 2 * 20)"), 22.0);
+  }
 }
