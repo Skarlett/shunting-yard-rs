@@ -219,7 +219,7 @@ fn eval<T: Deref<Target=Token>>(data: &str, postfix: &[T]) -> f32
             },
 
             (None, Some(b)) => {
-		let result = if matches!(tok.token_type, Lexer::Minus) {
+		let result = if let Lexer::Minus = tok.token_type {
 		    -b
 		} else {
 		    b
