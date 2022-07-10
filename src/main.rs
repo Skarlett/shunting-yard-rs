@@ -1,14 +1,22 @@
 use std::ops::Deref;
 
-/// Operation assocatition
-#[derive(Debug, Eq, PartialEq, Clone, Copy)]
-enum OpAssoc {
-  Left,
-  Right,
-  NonAssoc
+/// Lexical tokens represent a sequence of characters.
+/// The sequence identity is used to determine segments
+/// of the source (string) input.
+///
+/// Given the following example:
+///    123+321 *2
+///
+/// The following tokens would be produced:
+///    [INT] [ADD] [INT] [MULITPLY] [INT]
+#[derive(Debug)]
+struct Token {
+  token_type: Lexer,
+  start: usize,
+  end: usize
 }
 
-/// The type of token.
+/// The identity type for lexical tokens.
 #[derive(Debug, Clone, Copy)]
 enum Lexer {
   ParamOpen,
@@ -22,8 +30,19 @@ enum Lexer {
   Num,
 }
 
-impl Lexer {
-  /// is this token an operator
+/// Operator association.
+/// When operators of equal precedence
+/// occur next to each other on the operator stack.
+#[derive(Debug, Eq, PartialEq, Clone, Copy)]
+enum OpAssoc {
+  Left,
+  Right,
+  NonAssoc
+}
+
+impl Lexer
+{
+  /// Check if this token an operator
   fn is_operator(&self) -> bool {
     match self {
       Self::Num
@@ -33,45 +52,43 @@ impl Lexer {
     }
   }
 
-  /// order of operations
+  /// Order of operations table.
+  /// A table containing the order
+  /// of proceedures to perform first.
+  ///
+  /// Returned values are processed
+  /// greatest (first) to least (last).
+  ///
+  /// parentheses are included as 0 to negate
+  /// shunting yard's operator precedence check.
   fn precendence(&self) -> u8 {
     match self {
       Self::Pow => 3,
-      Self::Add => 1,
-      Self::Minus => 1,
       Self::Div => 2,
       Self::Mul => 2,
       Self::Mod => 2,
+      Self::Add => 1,
+      Self::Minus => 1,
       Self::ParamOpen => 0,
       _ => panic!("only operators should see their precendence")
     }
   }
 
-  /// operator assciotation
+  /// Operator association
+  /// is whether the right of the left hand side
+  /// of the operation
+  /// should be performed first.
+  ///
+  /// Given the following example:
+  ///    1 + 2 + 3
+  ///
+  ///   (1 + 2)+ 3   (left association)
+  ///    1 +(2 + 3) (right association)
   fn assoc(&self) -> OpAssoc {
     match self {
-      Self::ParamOpen
-        | Self::ParamClose => OpAssoc::NonAssoc,
-
+      Self::ParamOpen | Self::ParamClose => OpAssoc::NonAssoc,
       Self::Pow => OpAssoc::Right,
       _ => OpAssoc::Left
-    }
-  }
-}
-
-#[derive(Debug)]
-struct Token {
-  token_type: Lexer,
-  start: usize,
-  end: usize
-}
-
-impl Token {
-  fn new(token_type: Lexer, position: usize) -> Self {
-    Self {
-      token_type,
-      start: position,
-      end: position + 1
     }
   }
 }
@@ -81,9 +98,8 @@ fn tokenize_num(prev: Option<&mut Token>) -> Option<Lexer>
 {
   match prev {
     None => Some(Lexer::Num),
-
     Some(last) => {
-      // If the last token-type was a number,
+      // If the last token was a number,
       // and the current token, increment the last
       // token's end length to build a larger digit
       // eg "12"...
@@ -97,29 +113,33 @@ fn tokenize_num(prev: Option<&mut Token>) -> Option<Lexer>
   }
 }
 
-fn guard_integer(c: char) -> bool
-{ c.is_numeric() || ['.', '_'].contains(&c)}
+/// Detect whether or not the current character
+/// is apart of an integer
+fn guard_integer(c: char) -> bool {
+  return c.is_numeric() || ['.', '_'].contains(&c)
+}
 
-/// Fold function
+/// Creates a lexed stream of tokens.
 fn tokenize(mut acc: Vec<Token>, i: usize, c: char) -> Vec<Token>
 {
-  let token = match c {
+  let token = match c
+  {
     ' ' | '\n' | '\t' => None,
-    '+' => Some(Lexer::Add),
 
-    // jasonzou0 noted that we should consider
-    // negative numbers.
-    // if the previous token was a number
-    // or closed parenthesis, we create a minus token.
-    // Otherwise, we start building our a number token.
+
     '-' => match acc.last() {
-        Some(x) => match x.token_type {
+        None => Some(Lexer::Num),
+        Some(x) => match x.token_type
+        {
+          // Is an operator
           Lexer::Num | Lexer::ParamClose => Some(Lexer::Minus),
+
+          // Otherwise its apart of a number.
           _ => Some(Lexer::Num),
         }
-        None => Some(Lexer::Num)
     },
 
+    '+' => Some(Lexer::Add),
     '*' => Some(Lexer::Mul),
     '/' => Some(Lexer::Div),
     '^' => Some(Lexer::Pow),
@@ -132,37 +152,60 @@ fn tokenize(mut acc: Vec<Token>, i: usize, c: char) -> Vec<Token>
     x => panic!("unknown token [{}:{}] '{}'", i, i, x)
   };
 
-  if let Some(tok) = token {
-    acc.push(Token::new(tok, i))
+  if let Some(token_type) = token {
+      acc.push(Token { token_type, start: i, end: i + 1 });
   }
 
   acc
 }
 
-/// Shunting yard algorithm
-///
+/// Shunting yard algorithm.
+/// The parameter `tokens` expects the token stream
+/// to be formatted as in-fix notation ("1 + 2").
+/// Output is in RPN.
 fn parser<'a>(tokens: &'a [Token]) -> Vec<&'a Token>
 {
-    let mut stack = Vec::new();
+    let mut output = Vec::new();
     let mut op_stack = Vec::new();
 
     for token in tokens {
         match token.token_type {
-            Lexer::Num => stack.push(token),
+            // place into output queue
+            Lexer::Num => output.push(token),
+
+            // push onto the operator stack
             Lexer::ParamOpen => op_stack.push(token),
 
+            // while the top of the operator stack
+            // is not a left parenthesis,
+            // pop out of the operator stack
+            // and push into the output queue
             Lexer::ParamClose => {
-                while let Some(last) = op_stack.last() {
+                while let Some(last) = op_stack.last()
+                {
                     if let Lexer::ParamOpen = last.token_type
                     { break }
 
-                    stack.push(op_stack.pop().unwrap());
+                    output.push(op_stack.pop().unwrap());
                 }
-                op_stack.pop();
+
+                // remove left parenthesis
+                // from operator stack.
+                op_stack.pop()
+                  .expect("Expected an '(' to be in the operator stack");
             }
 
+            // token as "o1" if "o1" is an operator.
+            // ---
+            // while there is operator ("o2") other than
+            // the left parenthesis at the top of the
+            // operator stack.
+            //
+            // pop out of the operator stack
+            // and push into the output queue
             o1 if o1.is_operator() => {
-                while let Some(o2) = op_stack.last() {
+                while let Some(o2) = op_stack.last()
+                {
                     let operator = {
                         let o2 = o2.token_type;
                         let po1 = o1.precendence();
@@ -177,7 +220,7 @@ fn parser<'a>(tokens: &'a [Token]) -> Vec<&'a Token>
                         else { break }
                     };
 
-                    stack.push(operator);
+                    output.push(operator);
                 }
 
                 op_stack.push(token);
@@ -190,10 +233,12 @@ fn parser<'a>(tokens: &'a [Token]) -> Vec<&'a Token>
     // pop elements from the
     // right side (tail/end)
     // of the collection into the stack
-    stack.extend(op_stack.drain(..).rev());
-    return stack;
+    output.extend(op_stack.drain(..).rev());
+    return output;
 }
 
+/// Derive the integer value from a token also
+/// ignoring underscore ('_') characters.
 fn integer(data: &str, tok: &Token) -> f32 {
   data[tok.start..tok.end]
       .chars()
@@ -203,12 +248,12 @@ fn integer(data: &str, tok: &Token) -> f32 {
       .expect("Couldn't parse integer")
 }
 
-fn eval<T: Deref<Target=Token> + std::fmt::Debug>(data: &str, postfix: &[T]) -> f32
+/// Evaluate RPN.
+fn eval<T: Deref<Target=Token>>(data: &str, postfix: &[T]) -> f32
 {
     let mut stack = Vec::new();
 
     for tok in postfix.iter() {
-
         if let Lexer::Num = tok.token_type {
             stack.push(integer(data, tok));
             continue
@@ -230,8 +275,7 @@ fn eval<T: Deref<Target=Token> + std::fmt::Debug>(data: &str, postfix: &[T]) -> 
                 };
                 stack.push(result);
             },
-            (None, Some(b)) => stack.push(b),
-            //(None, Some(b)) => return b,
+            (None, Some(b)) => return b,
             (None, None) | (Some(_), None) => unreachable!()
         }
     }
@@ -373,7 +417,8 @@ mod tests {
   #[test]
   fn jasonzou0_pr1()
   {
-    assert_eq!(run_stage("-19 + 20)"), 1.0);
-    assert_eq!(run_stage("1 + ( -19 + 2 * 20)"), 22.0);
+    assert_eq!(run_stage("-19 + 20"), 1.0);
+    assert_eq!(run_stage("1 + (-19 + 2 * 20)"), 22.0);
+    assert_eq!(run_stage("-1 - -1"), 0.0);
   }
 }
