@@ -1,14 +1,16 @@
 use std::ops::Deref;
 
-/// Lexical tokens represent a sequence of characters.
-/// The sequence identity is used to determine segments
-/// of the source (string) input.
+/// Lexical tokens represent an identity of a single/sequence of characters.
+/// They're used to identify segments of the source text.
 ///
 /// Given the following example:
-///    123+321 *2
+///    123 + 321 * 2
 ///
-/// The following tokens would be produced:
+/// The lexical tokens would be:
 ///    [INT] [ADD] [INT] [MULITPLY] [INT]
+///
+/// These lexical units are stored in this structure,
+/// with their index position
 #[derive(Debug)]
 struct Token {
   token_type: Lexer,
@@ -16,23 +18,41 @@ struct Token {
   end: usize
 }
 
-/// The identity type for lexical tokens.
+/// All the different lexical identities a token may have.
 #[derive(Debug, Clone, Copy)]
 enum Lexer {
+  /// (
   ParamOpen,
+
+  /// )
   ParamClose,
+
+  /// +
   Add,
+
+  /// -
   Minus,
+
+  /// *
   Mul,
+
+  /// ^
   Pow,
+
+  /// %
   Mod,
+
+  /// /
   Div,
+
+  /// [0-9]+
   Num,
 }
 
-/// Operator association.
 /// When operators of equal precedence
 /// occur next to each other on the operator stack.
+///
+
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
 enum OpAssoc {
   Left,
@@ -75,9 +95,8 @@ impl Lexer
   }
 
   /// Operator association
-  /// is whether the right of the left hand side
-  /// of the operation
-  /// should be performed first.
+  /// is whether the right or the left side
+  /// of the operator should be evaluated first.
   ///
   /// Given the following example:
   ///    1 + 2 + 3
@@ -88,12 +107,18 @@ impl Lexer
     match self {
       Self::ParamOpen | Self::ParamClose => OpAssoc::NonAssoc,
       Self::Pow => OpAssoc::Right,
-      _ => OpAssoc::Left
+      Self::Num => panic!("operator assoc called on an integer."),
+      _ => OpAssoc::Left,
     }
   }
 }
 
-/// Creates multi-character representation of a number.
+/// Checks top of the token stack,
+/// if the top of the stack is of type `Num`,
+/// then increment its length by 1 (character).
+///
+/// otherwise, place a new `Num` type at the top
+/// of tokens.
 fn tokenize_num(prev: Option<&mut Token>) -> Option<Lexer>
 {
   match prev {
@@ -119,22 +144,45 @@ fn guard_integer(c: char) -> bool {
   return c.is_numeric() || ['.', '_'].contains(&c)
 }
 
-/// Creates a lexed stream of tokens.
-fn tokenize(mut acc: Vec<Token>, i: usize, c: char) -> Vec<Token>
+/// This function is ran with `Iterator::fold` and
+/// creates a collection of lexical tokens
+/// (as described in `Token` documentation).
+fn tokenize(mut accumulator: Vec<Token>, i: usize, c: char) -> Vec<Token>
 {
+
+  // This will return `Some(Lexed)` if
+  // there is a new token to be added
+  // to `tokens`.
+  //
+  // Otherwise in the condition of `None`,
+  // no token will be added to `tokens`
   let token = match c
   {
-    ' ' | '\n' | '\t' => None,
 
-
-    '-' => match acc.last() {
+    // If the current token is '-'
+    '-' => match accumulator.last()
+    {
+        // If there is no previous token in the collection,
+        // then this is a negative number.
+        // since subtraction operation takes 2 arguments. (N-N)
+        // example: -N
         None => Some(Lexer::Num),
+
+        // If there is a previous token.
         Some(x) => match x.token_type
         {
-          // Is an operator
+          // If the previous token
+          // was a number, or closing parathesis,
+          // this token should be an **operator**
+          //
+          // Example: PreviousNumber - Number
           Lexer::Num | Lexer::ParamClose => Some(Lexer::Minus),
 
-          // Otherwise its apart of a number.
+          // If the previous token was an operator,
+          // or an open parathesis. This token is a
+          // **negative** number.
+          //
+          // PreviousNumber + -Number
           _ => Some(Lexer::Num),
         }
     },
@@ -148,21 +196,34 @@ fn tokenize(mut acc: Vec<Token>, i: usize, c: char) -> Vec<Token>
     '(' => Some(Lexer::ParamOpen),
     ')' => Some(Lexer::ParamClose),
 
-    _ if guard_integer(c) => tokenize_num(acc.last_mut()),
+    // Filter out whitespace.
+    ' ' | '\n' | '\t' => None,
+
+    // if current character (`c`) is 0-9 or underscore.
+    // If the previous token was a `Num`,
+    // then increment the previous token's end/length.
+    _ if guard_integer(c) => tokenize_num(accumulator.last_mut()),
+
+    // unrecongized token-identity.
     x => panic!("unknown token [{}:{}] '{}'", i, i, x)
   };
 
-  if let Some(token_type) = token {
-      acc.push(Token { token_type, start: i, end: i + 1 });
+  // Add to tokens.
+  if let Some(token_type) = token
+  {
+      accumulator.push(Token { token_type, start: i, end: i + 1 });
   }
 
-  acc
+  return accumulator;
 }
 
 /// Shunting yard algorithm.
-/// The parameter `tokens` expects the token stream
-/// to be formatted as in-fix notation ("1 + 2").
-/// Output is in RPN.
+/// -----------------------
+/// @param tokens: expects the token collection to be formatted as in-fix notation ("1 + 2").
+/// Undefined behavior if collection is not formatted correctly.
+///
+/// The output of this function returns the original collection input,
+/// but reordered in postfix notation ("1 2 +")
 fn parser<'a>(tokens: &'a [Token]) -> Vec<&'a Token>
 {
     let mut output = Vec::new();
@@ -195,14 +256,14 @@ fn parser<'a>(tokens: &'a [Token]) -> Vec<&'a Token>
                   .expect("Expected an '(' to be in the operator stack");
             }
 
-            // token as "o1" if "o1" is an operator.
-            // ---
-            // while there is operator ("o2") other than
-            // the left parenthesis at the top of the
-            // operator stack.
+            // while there is operator at the
+            // top of the operator-stack o2
             //
-            // pop out of the operator stack
-            // and push into the output queue
+            // other than the left parenthesis. (`OpenParam`)
+            // pop o2 out of the operator stack
+            // and push o2 into the output queue
+            // ---
+            // token as "o1" if "o1" is an operator.
             o1 if o1.is_operator() => {
                 while let Some(o2) = op_stack.last()
                 {
@@ -226,18 +287,19 @@ fn parser<'a>(tokens: &'a [Token]) -> Vec<&'a Token>
                 op_stack.push(token);
             }
 
+
+            // Invalid state, can never be reached.
             _ => unreachable!(),
         }
     }
 
-    // pop elements from the
-    // right side (tail/end)
-    // of the collection into the stack
+    // pop from the head of the operator stack
+    // into the output until drained
     output.extend(op_stack.drain(..).rev());
     return output;
 }
 
-/// Derive the integer value from a token also
+/// cast string slice to integer value
 /// ignoring underscore ('_') characters.
 fn integer(data: &str, tok: &Token) -> f32 {
   data[tok.start..tok.end]
@@ -248,12 +310,18 @@ fn integer(data: &str, tok: &Token) -> f32 {
       .expect("Couldn't parse integer")
 }
 
-/// Evaluate RPN.
+/// Evaluate postfix/RPN notation by having a stack of integers,
+/// and applying operations onto the top items of the stack.
+///
+/// @param data: source text that was tokenized.
+/// @param postfix: collection of tokens in postfix notation to be evaluated.
+/// @type T: Any value, when dereferenced is of type Token.
 fn eval<T: Deref<Target=Token>>(data: &str, postfix: &[T]) -> f32
 {
     let mut stack = Vec::new();
 
-    for tok in postfix.iter() {
+    for tok in postfix.iter()
+    {
         if let Lexer::Num = tok.token_type {
             stack.push(integer(data, tok));
             continue
@@ -290,18 +358,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
   let mut buffer = String::new();
   println!("Try: .22 * 3_000");
 
-  loop {
+  loop
+  {
     stdout().write(b"> ")?;
     stdout().flush()?;
     stdin().read_line(&mut buffer)?;
 
     if buffer.eq("q\n") { break }
 
+    // create tokens.
     let tokens: Vec<Token> = buffer.chars()
       .enumerate()
       .fold(Vec::new(), |acc, (i, c)| tokenize(acc, i, c));
 
+    // arrange tokens into postfix
     let postfix = parser(&tokens);
+
+    // evaluate
     let result = eval(&buffer, &postfix);
 
     println!("{}", result);
