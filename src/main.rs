@@ -197,7 +197,7 @@ fn tokenize(mut accumulator: Vec<Token>, i: usize, c: char) -> Vec<Token>
     ')' => Some(Lexer::ParamClose),
 
     // Filter out whitespace.
-    ' ' | '\n' | '\t' => None,
+    ' ' | '\n' | '\t' | '\r' => None,
 
     // if current character (`c`) is 0-9 or underscore.
     // If the previous token was a `Num`,
